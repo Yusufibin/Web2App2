@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
+import android.provider.ContactsContract;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -24,15 +25,23 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
+    private enum ExportType { SMS, CONTACTS }
+    private ExportType pendingExportType;
+
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private final ActivityResultLauncher<String> requestPermissionLauncher =
             registerForActivityResult(new ActivityResultContracts.RequestPermission(), isGranted -> {
                 if (isGranted) {
-                    startSmsExport();
+                    if (pendingExportType == ExportType.SMS) {
+                        startSmsExport();
+                    } else if (pendingExportType == ExportType.CONTACTS) {
+                        startContactsExport();
+                    }
                 } else {
-                    Toast.makeText(this, "Permission denied to read SMS", Toast.LENGTH_SHORT).show();
+                    String type = pendingExportType == ExportType.SMS ? "SMS" : "contacts";
+                    Toast.makeText(this, "Permission denied to read " + type, Toast.LENGTH_SHORT).show();
                 }
             });
 
@@ -41,7 +50,7 @@ public class MainActivity extends AppCompatActivity {
                 if (result.getResultCode() == RESULT_OK && result.getData() != null) {
                     Uri uri = result.getData().getData();
                     if (uri != null) {
-                        saveSmsToFileInBackground(uri);
+                        saveToFileInBackground(uri, pendingExportType);
                     }
                 }
             });
@@ -53,32 +62,51 @@ public class MainActivity extends AppCompatActivity {
 
         Button btnDownloadSms = findViewById(R.id.btn_download_sms);
         btnDownloadSms.setOnClickListener(v -> {
+            pendingExportType = ExportType.SMS;
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) {
                 startSmsExport();
             } else {
                 requestPermissionLauncher.launch(Manifest.permission.READ_SMS);
             }
         });
+
+        Button btnDownloadContacts = findViewById(R.id.btn_download_contacts);
+        btnDownloadContacts.setOnClickListener(v -> {
+            pendingExportType = ExportType.CONTACTS;
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED) {
+                startContactsExport();
+            } else {
+                requestPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
+            }
+        });
     }
 
     private void startSmsExport() {
-        createFile();
+        createFile("my_sms_backup.txt");
     }
 
-    private void createFile() {
+    private void startContactsExport() {
+        createFile("my_contacts_backup.txt");
+    }
+
+    private void createFile(String title) {
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("text/plain");
-        intent.putExtra(Intent.EXTRA_TITLE, "my_sms_backup.txt");
+        intent.putExtra(Intent.EXTRA_TITLE, title);
         createFileLauncher.launch(intent);
     }
 
-    private void saveSmsToFileInBackground(Uri uri) {
+    private void saveToFileInBackground(Uri uri, ExportType type) {
         executorService.execute(() -> {
             boolean success = false;
             try (OutputStream outputStream = getContentResolver().openOutputStream(uri)) {
                 if (outputStream != null) {
-                    writeSmsToStream(outputStream);
+                    if (type == ExportType.SMS) {
+                        writeSmsToStream(outputStream);
+                    } else if (type == ExportType.CONTACTS) {
+                        writeContactsToStream(outputStream);
+                    }
                     success = true;
                 }
             } catch (IOException | IllegalArgumentException e) {
@@ -88,9 +116,11 @@ public class MainActivity extends AppCompatActivity {
             final boolean finalSuccess = success;
             mainHandler.post(() -> {
                 if (finalSuccess) {
-                    Toast.makeText(MainActivity.this, "SMS saved successfully", Toast.LENGTH_SHORT).show();
+                    String message = type == ExportType.SMS ? "SMS saved successfully" : "Contacts saved successfully";
+                    Toast.makeText(MainActivity.this, message, Toast.LENGTH_SHORT).show();
                 } else {
-                    Toast.makeText(MainActivity.this, "Failed to save SMS", Toast.LENGTH_SHORT).show();
+                    String message = type == ExportType.SMS ? "Failed to save SMS" : "Failed to save contacts";
+                    Toast.makeText(MainActivity.this, message, Toast.LENGTH_SHORT).show();
                 }
             });
         });
@@ -116,6 +146,34 @@ public class MainActivity extends AppCompatActivity {
                     sb.append("From: ").append(address).append("\n");
                     sb.append("Date: ").append(new java.util.Date(Long.parseLong(date))).append("\n");
                     sb.append("Message: ").append(body).append("\n");
+                    sb.append("----------------------------------\n");
+
+                    outputStream.write(sb.toString().getBytes());
+                } while (cursor.moveToNext());
+            }
+        }
+    }
+
+    private void writeContactsToStream(OutputStream outputStream) throws IOException {
+        Uri uri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI;
+        ContentResolver cr = getContentResolver();
+
+        String[] projection = new String[]{
+                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                ContactsContract.CommonDataKinds.Phone.NUMBER
+        };
+        try (Cursor cursor = cr.query(uri, projection, null, null, ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC")) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int indexName = cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME);
+                int indexNumber = cursor.getColumnIndexOrThrow(ContactsContract.CommonDataKinds.Phone.NUMBER);
+
+                do {
+                    String name = cursor.getString(indexName);
+                    String number = cursor.getString(indexNumber);
+
+                    StringBuilder sb = new StringBuilder();
+                    sb.append("Name: ").append(name).append("\n");
+                    sb.append("Phone: ").append(number).append("\n");
                     sb.append("----------------------------------\n");
 
                     outputStream.write(sb.toString().getBytes());
