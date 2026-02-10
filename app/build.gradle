@@ -3,6 +3,7 @@ plugins {
 }
 
 android {
+    namespace "com.csu.web2app"
     compileSdk 32
 
     defaultConfig {
