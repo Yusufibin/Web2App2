@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.View;
 import android.widget.Button;
 import android.widget.Toast;
 
@@ -100,6 +101,10 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
         }
+
+        findViewById(R.id.btn_send_all).setVisibility(View.GONE);
+        findViewById(R.id.loader).setVisibility(View.VISIBLE);
+
         Intent intent = new Intent(this, UploadService.class);
         intent.setAction(UploadService.ACTION_UPLOAD_ALL);
         ContextCompat.startForegroundService(this, intent);
